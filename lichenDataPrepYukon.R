@@ -8,14 +8,15 @@ defineModule(sim, list(
   name = "lichenDataPrepYukon",
   description = "",
   keywords = "",
-  authors = structure(list(list(given = c("First", "Middle"), family = "Last", role = c("aut", "cre"), email = "email@example.com", comment = NULL)), class = "person"),
+  authors = structure(list(list(given = c("Marcus", "Francois"), family = "Lapeyrolerie", role = c("aut", "cre"), email = "mlapeyro@mail.ubc.ca", comment = NULL)), class = "person"),
   childModules = character(0),
   version = list(lichenDataPrepYukon = "0.0.0.9000"),
   timeframe = as.POSIXlt(c(NA, NA)),
   timeunit = "year",
   citation = list("citation.bib"),
   documentation = list("NEWS.md", "README.md", "lichenDataPrepYukon.Rmd"),
-  reqdPkgs = list("PredictiveEcology/SpaDES.core@box (>= 2.1.6.9000)", "ggplot2"),
+  reqdPkgs = list("PredictiveEcology/SpaDES.core@box (>= 2.1.6.9000)", "reproducible", 
+                  "terra", "whitebox"),
   parameters = bindrows(
     #defineParameter("paramName", "paramClass", value, min, max, "parameter description"),
     defineParameter(".plots", "character", "screen", NA, NA,
@@ -56,62 +57,18 @@ doEvent.lichenDataPrepYukon = function(sim, eventTime, eventType) {
 
       # do stuff for this event
       sim <- Init(sim)
+      
+      sim <- scheduleEvent(sim, time(sim) + P(sim)$predictionInterval, "lichenDataPrepYukon", "updateDynamicCovariates")
 
-      # schedule future event(s)
-      sim <- scheduleEvent(sim, P(sim)$.plotInitialTime, "lichenDataPrepYukon", "plot")
-      sim <- scheduleEvent(sim, P(sim)$.saveInitialTime, "lichenDataPrepYukon", "save")
     },
-    plot = {
+    updateDynamicCovariates = {
       # ! ----- EDIT BELOW ----- ! #
       # do stuff for this event
 
-      plotFun(sim) # example of a plotting function
-      # schedule future event(s)
+      sim <- updateDynamicCovariates(sim)
 
       # e.g.,
-      #sim <- scheduleEvent(sim, time(sim) + P(sim)$.plotInterval, "lichenDataPrepYukon", "plot")
-
-      # ! ----- STOP EDITING ----- ! #
-    },
-    save = {
-      # ! ----- EDIT BELOW ----- ! #
-      # do stuff for this event
-
-      # e.g., call your custom functions/methods here
-      # you can define your own methods below this `doEvent` function
-
-      # schedule future event(s)
-
-      # e.g.,
-      # sim <- scheduleEvent(sim, time(sim) + P(sim)$.saveInterval, "lichenDataPrepYukon", "save")
-
-      # ! ----- STOP EDITING ----- ! #
-    },
-    event1 = {
-      # ! ----- EDIT BELOW ----- ! #
-      # do stuff for this event
-
-      # e.g., call your custom functions/methods here
-      # you can define your own methods below this `doEvent` function
-
-      # schedule future event(s)
-
-      # e.g.,
-      # sim <- scheduleEvent(sim, time(sim) + increment, "lichenDataPrepYukon", "templateEvent")
-
-      # ! ----- STOP EDITING ----- ! #
-    },
-    event2 = {
-      # ! ----- EDIT BELOW ----- ! #
-      # do stuff for this event
-
-      # e.g., call your custom functions/methods here
-      # you can define your own methods below this `doEvent` function
-
-      # schedule future event(s)
-
-      # e.g.,
-      # sim <- scheduleEvent(sim, time(sim) + increment, "lichenDataPrepYukon", "templateEvent")
+      sim <- scheduleEvent(sim, time(sim) + P(sim)$predictionInterval, "lichenDataPrepYukon", "updateDynamicCovariates")
 
       # ! ----- STOP EDITING ----- ! #
     },
@@ -123,7 +80,72 @@ doEvent.lichenDataPrepYukon = function(sim, eventTime, eventType) {
 ### template initialization
 Init <- function(sim) {
   # # ! ----- EDIT BELOW ----- ! #
-
+  # Loading data collected from Yukon's site, which we host on a google drive for
+  # efficiency
+  browser()
+  targetFile <- "data"
+  reproducible::prepInputs(url="https://drive.google.com/file/d/1OZjcd7Ln_SMkrJA-_mpjke2NruIJNe1M/view?usp=drive_link",
+                           destinationPath = sim$paths$inputPath,
+                           targetFile = paste0(targetFile, ".zip")) |>
+    reproducible::Cache()
+  utils::unzip(zipfile = file.path(sim$paths$inputPath, paste0(targetFile, ".zip")), 
+               exdir = file.path(sim$paths$inputPath, targetFile)) |>
+    reproducible::Cache()
+  dataDirPath <- file.path(sim$paths$inputPath, targetFile, "data")
+  
+  # Extracting topographic info
+  demFile <- "50n150w_20101117_gmted_med075.tif"
+  demPath <- file.path(dataDirPath, demFile)
+  dem <- terra::rast(demPath)
+  aspect <- terra::terrain(dem, v = "aspect", unit = "radians")
+  wbt_breach_depressions(demFile, "./filledDEM.tif")
+  wbt_slope("./filledDEM.tif", "./slopeDEM.tif", units = "radians")
+  wbt_d8_flow_accumulation("./filledDEM.tif", "./d8flowDEM.tif")
+  slope <- rast("./slopeDEM.tif")
+  d8flow <- rast("./d8flowDEM.tif")
+  wbt_twi <- log(d8flow / (tan(slope) + 0.001))
+  
+  # Linking NTEMS id's to stand type
+  speciesKeyPath <- file.path(dataDirPath, "sppEquivalencies_CA.csv")
+  speciesKey <- read.csv(speciesKeyPath) |> 
+    filter(is.na(NTEMS_Species_Code) == FALSE)
+  treeLegend <- speciesKey[, c("NTEMS_Species_Code", "Type")] |> unique()
+  treeLegend[nrow(treeLegend) + 1, ] <- c(0, "Unf")
+  abbreviationLabels <- c("C", "B", "U")
+  abbreviationCodes <- c("Conifer", "Deciduous", "Unf")
+  treeLegend$Type <- abbreviationLabels[match(treeLegend$Type, abbreviationCodes)]
+  treeLegend$NTEMS_Species_Code <- as.numeric(treeLegend$NTEMS_Species_Code)
+  levels(treeInventoryYukon) <- treeLegend
+  rm(speciesKey, treeLegend, abbreviationLabels, abbreviationCodes)
+  
+  # Filling in background of fire year and Stand type
+  unforestedVect <- terra::deepcopy(sim$studyArea)
+  unforestedVect$zone <- "U"
+  unforestedBackground <- rasterize(unforestedVect, sim$rasterToMatch, field = "zone")
+  treeInventoryFilled <- terra::merge(treeInventory, unforestedbackground)
+  rm(fireBackground, vegBackground, tSinceFireRast, vegInventoryYukon)
+  
+  # Project to the same CRS
+  slope <- terra::project(slope, crs(sim$studyArea))
+  elev <- terra::project(dem, crs(sim$studyArea))
+  aspect <- terra::project(aspect, crs(sim$studyArea))
+  wbt_twi <- terra::project(wbt_twi, crs(sim$studyArea))
+  
+  elev_rs <- terra::resample(terra::mask(elev, sim$studyArea), sim$rasterToMatch, "average")
+  slope_rs <- terra::resample(slope, sim$rasterToMatch, "average")
+  aspect_rs <- terra::resample(aspect, sim$rasterToMatch, "average")
+  wbt_twi_rs <- terra::resample(wbt_twi, sim$rasterToMatch, "average")
+  treeInventory_rs <- terra::resample(treeInventoryFilled, sim$rasterToMatch, "mode")
+  tSinceFireRast_rs <- terra::resample(tSinceFireRastFilled, sim$rasterToMatch, "mode")
+  rm(slope, elev, aspect, wbt_twi, vegInventoryYukonFilled, tSinceFireRastFilled, lichen_presence_absence)
+  
+  # RETHINK dynamicInputs HERE
+  staticInputs <- c(slope_rs, elev_rs, aspect_rs, wbt_twi_rs) 
+  dynamicInputs <- c(tSinceFireRast_rs, vegInventoryYukon_rs)
+  staticDT <- as.data.table(staticInputs, na.rm = TRUE, xy = TRUE)
+  dynamicDT <- as.data.table(dynamicInputs, na.rm = TRUE, xy = TRUE)
+  data.table::fwrite(staticDT, file = file.path(dataDirPath, "staticInputs.csv"), row.names = FALSE)
+  data.table::fwrite(dynamicDT, file = file.path(dataDirPath, "dynamicInputs.csv"), row.names = FALSE)
   # ! ----- STOP EDITING ----- ! #
 
   return(invisible(sim))
@@ -150,23 +172,11 @@ plotFun <- function(sim) {
 }
 
 ### template for your event1
-Event1 <- function(sim) {
+updateDynamicCovariates <- function(sim) {
   # ! ----- EDIT BELOW ----- ! #
-  # THE NEXT TWO LINES ARE FOR DUMMY UNIT TESTS; CHANGE OR DELETE THEM.
-  # sim$event1Test1 <- " this is test for event 1. " # for dummy unit test
-  # sim$event1Test2 <- 999 # for dummy unit test
-
-  # ! ----- STOP EDITING ----- ! #
-  return(invisible(sim))
-}
-
-### template for your event2
-Event2 <- function(sim) {
-  # ! ----- EDIT BELOW ----- ! #
-  # THE NEXT TWO LINES ARE FOR DUMMY UNIT TESTS; CHANGE OR DELETE THEM.
-  # sim$event2Test1 <- " this is test for event 2. " # for dummy unit test
-  # sim$event2Test2 <- 777  # for dummy unit test
-
+  # WRITE CODE TO TAKE STAND AGE AND STAND CLASS FOR COHORT DATA
+  
+  # OUTPUT A NEW dynamicInputs.csv
   # ! ----- STOP EDITING ----- ! #
   return(invisible(sim))
 }
