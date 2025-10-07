@@ -58,6 +58,8 @@ doEvent.lichenDataPrepYukon = function(sim, eventTime, eventType) {
       # do stuff for this event
       sim <- Init(sim)
       
+      sim <- updateDynamicCovariates(sim)
+      
       sim <- scheduleEvent(sim, time(sim) + P(sim)$predictionInterval, "lichenDataPrepYukon", "updateDynamicCovariates")
 
     },
@@ -82,70 +84,63 @@ Init <- function(sim) {
   # # ! ----- EDIT BELOW ----- ! #
   # Loading data collected from Yukon's site, which we host on a google drive for
   # efficiency
-  browser()
   targetFile <- "data"
   reproducible::prepInputs(url="https://drive.google.com/file/d/1OZjcd7Ln_SMkrJA-_mpjke2NruIJNe1M/view?usp=drive_link",
-                           destinationPath = sim$paths$inputPath,
-                           targetFile = paste0(targetFile, ".zip")) |>
+                           destinationPath = paths(sim)$inputPath,
+                           targetFile = paste0(targetFile, "2.zip"),
+                           fun = NA) |>
     reproducible::Cache()
-  utils::unzip(zipfile = file.path(sim$paths$inputPath, paste0(targetFile, ".zip")), 
-               exdir = file.path(sim$paths$inputPath, targetFile)) |>
+  dataDirPath <- file.path(paths(sim)$inputPath, targetFile)
+  whitebox::install_whitebox() |>
     reproducible::Cache()
-  dataDirPath <- file.path(sim$paths$inputPath, targetFile, "data")
   
   # Extracting topographic info
   demFile <- "50n150w_20101117_gmted_med075.tif"
   demPath <- file.path(dataDirPath, demFile)
   dem <- terra::rast(demPath)
-  aspect <- terra::terrain(dem, v = "aspect", unit = "radians")
-  wbt_breach_depressions(demFile, "./filledDEM.tif")
-  wbt_slope("./filledDEM.tif", "./slopeDEM.tif", units = "radians")
-  wbt_d8_flow_accumulation("./filledDEM.tif", "./d8flowDEM.tif")
-  slope <- rast("./slopeDEM.tif")
-  d8flow <- rast("./d8flowDEM.tif")
+  # Uncomment this later; geomatics computations take forever
+  aspect <- terra::terrain(dem, v = "aspect", unit = "radians") |>
+    reproducible::Cache()
+  #wbt_breach_depressions(demPath, file.path(dataDirPath, "filledDEM.tif")) |>
+  #  reproducible::Cache()
+  #wbt_slope(file.path(dataDirPath, "filledDEM.tif"), file.path(dataDirPath, "slopeDEM.tif"), units = "radians") |>
+  #  reproducible::Cache()
+  #wbt_d8_flow_accumulation(file.path(dataDirPath, "filledDEM.tif"), file.path(dataDirPath, "d8flowDEM.tif")) |>
+  #  reproducible::Cache()
+  slope <- rast(file.path(dataDirPath, "../slopeDEM.tif"))
+  d8flow <- rast(file.path(dataDirPath, "../d8flowDEM.tif"))
   wbt_twi <- log(d8flow / (tan(slope) + 0.001))
   
-  # Linking NTEMS id's to stand type
-  speciesKeyPath <- file.path(dataDirPath, "sppEquivalencies_CA.csv")
-  speciesKey <- read.csv(speciesKeyPath) |> 
-    filter(is.na(NTEMS_Species_Code) == FALSE)
-  treeLegend <- speciesKey[, c("NTEMS_Species_Code", "Type")] |> unique()
-  treeLegend[nrow(treeLegend) + 1, ] <- c(0, "Unf")
-  abbreviationLabels <- c("C", "B", "U")
-  abbreviationCodes <- c("Conifer", "Deciduous", "Unf")
-  treeLegend$Type <- abbreviationLabels[match(treeLegend$Type, abbreviationCodes)]
-  treeLegend$NTEMS_Species_Code <- as.numeric(treeLegend$NTEMS_Species_Code)
-  levels(treeInventoryYukon) <- treeLegend
-  rm(speciesKey, treeLegend, abbreviationLabels, abbreviationCodes)
-  
-  # Filling in background of fire year and Stand type
-  unforestedVect <- terra::deepcopy(sim$studyArea)
-  unforestedVect$zone <- "U"
-  unforestedBackground <- rasterize(unforestedVect, sim$rasterToMatch, field = "zone")
-  treeInventoryFilled <- terra::merge(treeInventory, unforestedbackground)
-  rm(fireBackground, vegBackground, tSinceFireRast, vegInventoryYukon)
-  
   # Project to the same CRS
-  slope <- terra::project(slope, crs(sim$studyArea))
-  elev <- terra::project(dem, crs(sim$studyArea))
-  aspect <- terra::project(aspect, crs(sim$studyArea))
-  wbt_twi <- terra::project(wbt_twi, crs(sim$studyArea))
+  slope <- terra::project(slope, crs(sim$pixelGroupMap)) |>
+    reproducible::Cache()
+  elev <- terra::project(dem, crs(sim$pixelGroupMap)) |>
+    reproducible::Cache()
+  aspect <- terra::project(aspect, crs(sim$pixelGroupMap)) |>
+    reproducible::Cache()
+  wbt_twi <- terra::project(wbt_twi, crs(sim$pixelGroupMap)) |>
+    reproducible::Cache()
   
-  elev_rs <- terra::resample(terra::mask(elev, sim$studyArea), sim$rasterToMatch, "average")
-  slope_rs <- terra::resample(slope, sim$rasterToMatch, "average")
-  aspect_rs <- terra::resample(aspect, sim$rasterToMatch, "average")
-  wbt_twi_rs <- terra::resample(wbt_twi, sim$rasterToMatch, "average")
-  treeInventory_rs <- terra::resample(treeInventoryFilled, sim$rasterToMatch, "mode")
-  tSinceFireRast_rs <- terra::resample(tSinceFireRastFilled, sim$rasterToMatch, "mode")
-  rm(slope, elev, aspect, wbt_twi, vegInventoryYukonFilled, tSinceFireRastFilled, lichen_presence_absence)
+  elev_rs <- terra::resample(elev, sim$pixelGroupMap, "average") |>
+    reproducible::Cache()
+  slope_rs <- terra::resample(slope, sim$pixelGroupMap, "average") |>
+    reproducible::Cache()
+  aspect_rs <- terra::resample(aspect, sim$pixelGroupMap, "average") |>
+    reproducible::Cache()
+  wbt_twi_rs <- terra::resample(wbt_twi, sim$pixelGroupMap, "average") |>
+    reproducible::Cache()
   
-  # RETHINK dynamicInputs HERE
-  staticInputs <- c(slope_rs, elev_rs, aspect_rs, wbt_twi_rs) 
-  dynamicInputs <- c(tSinceFireRast_rs, vegInventoryYukon_rs)
-  staticDT <- as.data.table(staticInputs, na.rm = TRUE, xy = TRUE)
-  dynamicDT <- as.data.table(dynamicInputs, na.rm = TRUE, xy = TRUE)
-  data.table::fwrite(staticDT, file = file.path(dataDirPath, "staticInputs.csv"), row.names = FALSE)
-  data.table::fwrite(dynamicDT, file = file.path(dataDirPath, "dynamicInputs.csv"), row.names = FALSE)
+  elev_mask <- terra::mask(elev_rs, sim$studyArea) 
+  slope_mask <- terra::mask(slope_rs, sim$studyArea)
+  aspect_mask <- terra::mask(aspect_rs, sim$studyArea)
+  wbt_twi_mask <- terra::mask(wbt_twi_rs, sim$studyArea)
+  
+  sim$lichenStaticCovariates <- data.table(pixelGroup = as.numeric(terra::values(sim$pixelGroupMap)),
+                                           elev = as.numeric(terra::values(elev_mask)),
+                                           slope = as.numeric(terra::values(slope_mask)),
+                                           aspect = as.numeric(terra::values(aspect_mask)),
+                                           wbt_twi = as.numeric(terra::values(wbt_twi_mask))) |>
+    reproducible::Cache()
   # ! ----- STOP EDITING ----- ! #
 
   return(invisible(sim))
@@ -174,9 +169,29 @@ plotFun <- function(sim) {
 ### template for your event1
 updateDynamicCovariates <- function(sim) {
   # ! ----- EDIT BELOW ----- ! #
-  # WRITE CODE TO TAKE STAND AGE AND STAND CLASS FOR COHORT DATA
+  cohortData <- vegTypeGenerator(sim$cohortData)
+  cohortData$standType <- ifelse(grepl("Pice|Abie|Pinu", cohortData$leading, ignore.case = TRUE),
+                            "C", "D")
+  cohortData$standAge <- floor(cohortData$age / 10) * 10
   
-  # OUTPUT A NEW dynamicInputs.csv
+  cohortData <- cohortData[, .(pixelGroup, standAge, standType)]
+  cohortData <- cohortData[, .(
+          standAge = first(standAge),
+          standType = first(standType)
+      ), by = pixelGroup]
+  sim$lichenDynamicCovariates <- data.table(pixelGroup = as.numeric(terra::values(sim$pixelGroupMap)))
+  
+  sim$lichenDynamicCovariates[
+    cohortData,
+    on = "pixelGroup",
+    `:=`(standAge = i.standAge, standType = i.standType)
+  ]
+  sim$lichenDynamicCovariates$inStudyArea <- terra::values(sim$rasterToMatch)
+  sim$lichenDynamicCovariates[is.na(standType) & inStudyArea == 1, standType := "U"]
+  sim$lichenDynamicCovariates[is.na(standAge) & inStudyArea == 1, standAge := 80] # REVISIT THIS
+  sim$lichenDynamicCovariates[, inStudyArea := NULL]
+  
+  
   # ! ----- STOP EDITING ----- ! #
   return(invisible(sim))
 }
