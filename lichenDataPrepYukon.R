@@ -52,9 +52,6 @@ doEvent.lichenDataPrepYukon = function(sim, eventTime, eventType) {
   switch(
     eventType,
     init = {
-      ### check for more detailed object dependencies:
-      ### (use `checkObject` or similar)
-
       # do stuff for this event
       sim <- Init(sim)
       
@@ -82,8 +79,7 @@ doEvent.lichenDataPrepYukon = function(sim, eventTime, eventType) {
 ### template initialization
 Init <- function(sim) {
   # # ! ----- EDIT BELOW ----- ! #
-  # Loading data collected from Yukon's site, which we host on a google drive for
-  # efficiency
+  # Loading data collected from Yukon's site, which is hosted on google drive
   targetFile <- "data"
   reproducible::prepInputs(url="https://drive.google.com/file/d/1OZjcd7Ln_SMkrJA-_mpjke2NruIJNe1M/view?usp=drive_link",
                            destinationPath = paths(sim)$inputPath,
@@ -98,7 +94,6 @@ Init <- function(sim) {
   demFile <- "50n150w_20101117_gmted_med075.tif"
   demPath <- file.path(dataDirPath, demFile)
   dem <- terra::rast(demPath)
-  # Uncomment this later; geomatics computations take forever
   aspect <- terra::terrain(dem, v = "aspect", unit = "radians") |>
     reproducible::Cache()
   #wbt_breach_depressions(demPath, file.path(dataDirPath, "filledDEM.tif")) |>
@@ -111,7 +106,7 @@ Init <- function(sim) {
   d8flow <- rast(file.path(dataDirPath, "../d8flowDEM.tif"))
   wbt_twi <- log(d8flow / (tan(slope) + 0.001))
   
-  # Project to the same CRS
+  # Projecting rasters to the appropriate CRS
   slope <- terra::project(slope, crs(sim$pixelGroupMap)) |>
     reproducible::Cache()
   elev <- terra::project(dem, crs(sim$pixelGroupMap)) |>
@@ -121,6 +116,7 @@ Init <- function(sim) {
   wbt_twi <- terra::project(wbt_twi, crs(sim$pixelGroupMap)) |>
     reproducible::Cache()
   
+  # Resampling rasters to match resolution and extent of study area
   elev_rs <- terra::resample(elev, sim$pixelGroupMap, "average") |>
     reproducible::Cache()
   slope_rs <- terra::resample(slope, sim$pixelGroupMap, "average") |>
@@ -130,6 +126,7 @@ Init <- function(sim) {
   wbt_twi_rs <- terra::resample(wbt_twi, sim$pixelGroupMap, "average") |>
     reproducible::Cache()
   
+  # Removing values outside the study area
   elev_mask <- terra::mask(elev_rs, sim$studyArea) 
   slope_mask <- terra::mask(slope_rs, sim$studyArea)
   aspect_mask <- terra::mask(aspect_rs, sim$studyArea)
